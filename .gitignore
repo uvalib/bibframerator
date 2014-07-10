@@ -1,6 +1,6 @@
-.project
+project/target
 target/
-project/
+.project
 .history
 .cache
 .DS_Store
