@@ -1,11 +1,11 @@
 package edu.virginia.lib.bibframerator
 
 import java.io.File
-import java.nio.file.{ Path, Paths, SimpleFileVisitor, WatchEvent, WatchKey, WatchService }
+import java.nio.file.{ Path, Paths, SimpleFileVisitor => Visitor, WatchEvent, WatchKey, WatchService }
 import java.nio.file.FileVisitResult.CONTINUE
 import java.nio.file.Files.walkFileTree
 import java.nio.file.StandardWatchEventKinds.{ ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY }
-import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.{ BasicFileAttributes => Attr }
 import Console.err
 import collection.JavaConversions.asScalaBuffer
 import collection.mutable.Map
@@ -21,11 +21,10 @@ import net.sf.saxon.s9api.XQueryExecutable
 
 object Bibframerator extends Runnable {
 
-  val libraryUri = "http://www.lib.virginia.edu/"
-
   val event_types = Array(ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
 
   var watchedDir: Path = null
+
   var transformedDir: Path = null
 
   var watcher: WatchService = null
@@ -34,15 +33,13 @@ object Bibframerator extends Runnable {
 
   val xqueryProcessor = new Processor(false)
 
-  val classloader = this.getClass getClassLoader
-
   val compiler = xqueryProcessor newXQueryCompiler ()
 
   var xquery: XQueryExecutable = null
 
   def main(args: Array[String]): Unit = {
     if (args.length != 3) {
-      err println ("Usage: bibframerator /from/dir transform-file /to/dir")
+      err println "Usage: bibframerator /from/dir transform-file /to/dir"
       exit(1)
     }
     watchedDir = args(0)
@@ -57,9 +54,8 @@ object Bibframerator extends Runnable {
       watcher = watchedDir.getFileSystem newWatchService
 
       keys put (watchedDir register (watcher, event_types: _*), watchedDir)
-
-      walkFileTree(watchedDir, new SimpleFileVisitor[Path]() {
-        override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = {
+      walkFileTree(watchedDir, new Visitor[Path] {
+        override def preVisitDirectory(dir: Path, attrs: Attr) = {
           keys put (dir register (watcher, event_types: _*), dir)
           println(s"Registered $dir for observation")
           CONTINUE
@@ -75,33 +71,36 @@ object Bibframerator extends Runnable {
             event =>
               future { actOnEvent(event) } onFailure {
                 case e: Throwable => {
-                  err println (s"Failed to operate on $event with exception $e")
-                  e printStackTrace (err)
+                  err println s"Failed to operate on $event with exception $e"
+                  e printStackTrace err
                 }
               }
           }
           catch {
             case e: Exception => {
-              err println ("Exception: " + e)
-              e printStackTrace (err)
+              err println s"Exception: $e"
+              e printStackTrace err
             }
           }
 
           if (!(watchKey reset)) {
-            err println ("Watchkey no longer valid!")
-            watchKey cancel ()
-            watcher close ()
-            break
+            err println "Watchkey no longer valid!"
+            keys remove watchKey
+            watchKey cancel;
+            if (keys isEmpty) {
+              watcher close;
+              break
+            }
           }
 
           def actOnEvent(event: WatchEvent[_]) = {
 
             val filename = event.context.asInstanceOf[Path]
             val sourceDir = keys(watchKey)
-            val sourcePath = sourceDir resolve (filename)
+            val sourcePath = sourceDir resolve filename
             println(s"Received event from path: $sourcePath")
-            val destDir = transformedDir resolve (sourceDir.subpath(watchedDir getNameCount, sourceDir getNameCount))
-            val transformedPath = destDir resolve (filename)
+            val destDir = transformedDir resolve (sourceDir subpath (watchedDir getNameCount, sourceDir getNameCount))
+            val transformedPath = destDir resolve filename
 
             event kind match {
               case ENTRY_CREATE => {
@@ -120,7 +119,7 @@ object Bibframerator extends Runnable {
               case ENTRY_DELETE => {
                 println(s"Deleting $transformedPath")
                 if (!(transformedPath delete)) {
-                  err println (s"Failed to delete $transformedPath")
+                  err println s"Failed to delete $transformedPath"
                 }
               }
             }
@@ -128,11 +127,11 @@ object Bibframerator extends Runnable {
             def doTransform {
               val transform = xquery load;
               transform setSource (new StreamSource(sourcePath))
-              val output = xqueryProcessor newSerializer (transformedPath)
+              val output = xqueryProcessor newSerializer transformedPath
               output setOutputProperty (METHOD, "xml")
               output setOutputProperty (INDENT, "yes")
               try {
-                transform setDestination (output)
+                transform setDestination output
                 transform run
               } finally output close;
               println(s"Wrote to $transformedPath")
@@ -143,8 +142,8 @@ object Bibframerator extends Runnable {
     } catch {
       case ie: InterruptedException => exit(0)
       case e: Exception => {
-        err println ("Exception: " + e)
-        e printStackTrace (err)
+        err println s"Exception: $e"
+        e printStackTrace err
         exit(1)
       }
     }
