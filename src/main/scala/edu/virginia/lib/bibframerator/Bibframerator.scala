@@ -4,7 +4,7 @@ import java.io.File
 import java.nio.file.{ Path, Paths, SimpleFileVisitor => Visitor, WatchEvent, WatchKey, WatchService }
 import java.nio.file.FileVisitResult.CONTINUE
 import java.nio.file.Files.walkFileTree
-import java.nio.file.StandardWatchEventKinds.{ ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY }
+import java.nio.file.StandardWatchEventKinds.{ ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY, OVERFLOW }
 import java.nio.file.attribute.{ BasicFileAttributes => Attr }
 import Console.err
 import collection.JavaConversions.asScalaBuffer
@@ -38,12 +38,10 @@ object Bibframerator extends Runnable {
   var xquery: XQueryExecutable = null
 
   def main(args: Array[String]): Unit = {
-    if (args.length != 3) {
-      err println "Usage: bibframerator /from/dir transform-file /to/dir"
-      exit(1)
-    }
+    require(args.length == 3, "Usage: bibframerator /from/dir transform-file /to/dir")
+
     watchedDir = args(0)
-    xquery = compiler compile (new File(args(1)))
+    xquery = compiler compile new File(args(1))
     transformedDir = args(2)
     new Thread(this) start
   }
@@ -105,22 +103,20 @@ object Bibframerator extends Runnable {
             event kind match {
               case ENTRY_CREATE => {
                 if (sourcePath isDirectory) {
-                  sourcePath register (watcher, event_types: _*)
+                  keys put (sourcePath register (watcher, event_types: _*), sourcePath)
                   println(s"Registered $sourcePath for observation")
                   transformedPath mkdir
-                } else {
-                  doTransform
-                }
+                } else doTransform
               }
-              case ENTRY_MODIFY => {
-                if (sourcePath isFile)
-                  doTransform
-              }
+              case ENTRY_MODIFY if (sourcePath isFile) => doTransform
               case ENTRY_DELETE => {
                 println(s"Deleting $transformedPath")
                 if (!(transformedPath delete)) {
                   err println s"Failed to delete $transformedPath"
                 }
+              }
+              case OVERFLOW => {
+                err println "Events were lost in overflow!"
               }
             }
 
